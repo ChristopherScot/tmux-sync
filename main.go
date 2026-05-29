@@ -9,9 +9,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"time"
+
+	"github.com/ChristopherScot/tmux-sync/internal/config"
 )
 
 // Set at build time by GoReleaser.
@@ -83,12 +87,54 @@ func isDiagnostic(cmd string) bool {
 	return false
 }
 
+func fail(err error) {
+	fmt.Fprintf(os.Stderr, "tmux-sync: %v\n", err)
+	os.Exit(1)
+}
+
 func notYet(cmd string) {
 	fmt.Fprintf(os.Stderr, "tmux-sync %s: not yet implemented — see SPEC.md\n", cmd)
 	os.Exit(1)
 }
 
-func cmdCheckout(args []string) { notYet("checkout") }
-func cmdCheckin(args []string)  { notYet("checkin") }
-func cmdStatus(args []string)   { notYet("status") }
-func cmdList(args []string)     { notYet("list") }
+func cmdCheckout(args []string) {
+	fs := flag.NewFlagSet("checkout", flag.ExitOnError)
+	from := fs.String("from", "", "endpoint name to check out from (defined in config.yaml)")
+	session := fs.String("session", "", "session name to capture (default: the foreground session)")
+	_ = fs.Parse(args)
+	if *from == "" {
+		fmt.Fprintln(os.Stderr, "checkout: --from <endpoint> required")
+		os.Exit(2)
+	}
+	_ = session // TODO: thread through to session capture
+
+	cfg, err := config.Load()
+	if err != nil {
+		fail(err)
+	}
+	d, err := cfg.Resolve(*from)
+	if err != nil {
+		fail(err)
+	}
+	defer d.Close()
+
+	// Foundation milestone — Driver plumbing only. Prove Exec works
+	// end-to-end (transport, container, streams) before layering nvim flush
+	// + resurrect save + git bundle + tar on top.
+	fmt.Fprintf(os.Stderr, "tmux-sync: target = %s\n", d.String())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = d.Exec(ctx, []string{"sh", "-c",
+		`echo "hello from $(uname -n)"; tmux ls 2>/dev/null || echo '(no tmux server yet)'`,
+	}, nil, os.Stdout, os.Stderr)
+	if err != nil {
+		fail(fmt.Errorf("driver smoke test failed: %w", err))
+	}
+
+	fmt.Fprintln(os.Stderr, "checkout: real flow not yet implemented — see SPEC.md")
+	os.Exit(1)
+}
+
+func cmdCheckin(args []string) { notYet("checkin") }
+func cmdStatus(args []string)  { notYet("status") }
+func cmdList(args []string)    { notYet("list") }
