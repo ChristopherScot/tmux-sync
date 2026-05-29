@@ -15,6 +15,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/christopherscot/tmux-sync/internal/capture"
 	"github.com/christopherscot/tmux-sync/internal/config"
 )
 
@@ -118,20 +119,23 @@ func cmdCheckout(args []string) {
 	}
 	defer d.Close()
 
-	// Foundation milestone — Driver plumbing only. Prove Exec works
-	// end-to-end (transport, container, streams) before layering nvim flush
-	// + resurrect save + git bundle + tar on top.
-	fmt.Fprintf(os.Stderr, "tmux-sync: target = %s\n", d.String())
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Bundle dir on the REMOTE side: all capture steps drop their artifacts
+	// here, then the final tar-up step ships the whole tree to the laptop.
+	bundleDir := fmt.Sprintf("/tmp/tmux-sync/checkout-%s", time.Now().UTC().Format("20060102-150405"))
+	fmt.Fprintf(os.Stderr, "tmux-sync checkout: target = %s\n", d.String())
+	fmt.Fprintf(os.Stderr, "  remote bundle dir = %s\n", bundleDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	err = d.Exec(ctx, []string{"sh", "-c",
-		`echo "hello from $(uname -n)"; tmux ls 2>/dev/null || echo '(no tmux server yet)'`,
-	}, nil, os.Stdout, os.Stderr)
-	if err != nil {
-		fail(fmt.Errorf("driver smoke test failed: %w", err))
+
+	// Step 1/N — flush every live nvim to disk + capture per-instance
+	// mksession. After this, no editor content lives only in memory.
+	nvimDir := bundleDir + "/nvim"
+	if err := capture.FlushNvim(ctx, d, nvimDir, os.Stderr); err != nil {
+		fail(fmt.Errorf("nvim flush: %w", err))
 	}
 
-	fmt.Fprintln(os.Stderr, "checkout: real flow not yet implemented — see SPEC.md")
+	fmt.Fprintln(os.Stderr, "checkout: remaining steps (resurrect save, git bundle, transfer) not yet implemented — see SPEC.md")
 	os.Exit(1)
 }
 
