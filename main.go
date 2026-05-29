@@ -15,7 +15,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/ChristopherScot/tmux-sync/internal/config"
+	"github.com/christopherscot/tmux-sync/internal/config"
 )
 
 // Set at build time by GoReleaser.

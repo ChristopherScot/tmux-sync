@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ChristopherScot/tmux-sync/internal/driver"
+	"github.com/christopherscot/tmux-sync/internal/driver"
 	"gopkg.in/yaml.v3"
 )
 
