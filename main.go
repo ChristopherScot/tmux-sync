@@ -12,13 +12,16 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/christopherscot/tmux-sync/internal/capture"
 	"github.com/christopherscot/tmux-sync/internal/config"
+	"github.com/christopherscot/tmux-sync/internal/driver"
 	"github.com/christopherscot/tmux-sync/internal/reconstruct"
 )
 
@@ -215,6 +218,121 @@ func cmdCheckout(args []string) {
 	os.Exit(0)
 }
 
-func cmdCheckin(args []string) { notYet("checkin") }
-func cmdStatus(args []string)  { notYet("status") }
-func cmdList(args []string)    { notYet("list") }
+func cmdCheckin(args []string) {
+	fs := flag.NewFlagSet("checkin", flag.ExitOnError)
+	to := fs.String("to", "", "endpoint name to check in to (defined in config.yaml)")
+	_ = fs.Parse(args)
+	if *to == "" {
+		fmt.Fprintln(os.Stderr, "checkin: --to <endpoint> required")
+		os.Exit(2)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fail(err)
+	}
+	// Resolve the remote target now so a config typo fails fast, before we do
+	// any capture work. The Driver itself is used by the transfer + restore
+	// step that comes next.
+	podDriver, err := cfg.Resolve(*to)
+	if err != nil {
+		fail(err)
+	}
+	defer podDriver.Close()
+
+	localBase, err := os.UserHomeDir()
+	if err != nil {
+		fail(fmt.Errorf("locate home dir: %w", err))
+	}
+	workspaceRoot := filepath.Join(localBase, ".tmux-sync", "workspaces", *to)
+	if _, err := os.Stat(workspaceRoot); err != nil {
+		fail(fmt.Errorf("no local workspace for endpoint %q at %s — run `tmux-sync checkout --from %s` first", *to, workspaceRoot, *to))
+	}
+
+	bundleDir := filepath.Join(localBase, ".tmux-sync", "checkins",
+		"checkin-"+time.Now().UTC().Format("20060102-150405"))
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		fail(fmt.Errorf("mkdir bundle: %w", err))
+	}
+
+	fmt.Fprintf(os.Stderr, "tmux-sync checkin: target = %s\n", podDriver.String())
+	fmt.Fprintf(os.Stderr, "  workspace root = %s\n", workspaceRoot)
+	fmt.Fprintf(os.Stderr, "  local bundle   = %s\n", bundleDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Step 1 — flush nvims inside the local container so disk is the source
+	// of truth. Skipped (with a note) when the container isn't up — the user
+	// is editing outside it and is expected to have saved their buffers.
+	containerName := "tmux-sync-" + *to
+	if dockerOnPath() && containerIsRunning(ctx, containerName) {
+		dd, err := driver.NewDockerExec(containerName)
+		if err != nil {
+			fail(fmt.Errorf("docker driver: %w", err))
+		}
+		nvimDir := bundleDir + "/nvim"
+		if err := capture.FlushNvim(ctx, dd, nvimDir, os.Stderr); err != nil {
+			fail(fmt.Errorf("local nvim flush: %w", err))
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "  local container not running — skipping nvim flush (save your buffers first)")
+	}
+
+	// Step 2 — bundle local repos via the Local driver pointed at the laptop's
+	// workspaces dir. Same shadow-commit script the pod side runs in checkout;
+	// just a different mount point.
+	local := driver.Local{}
+	if err := capture.BundleRepos(ctx, local, workspaceRoot, bundleDir, os.Stderr); err != nil {
+		fail(fmt.Errorf("local git bundle: %w", err))
+	}
+
+	// Step 2.5 — loose files
+	if err := capture.BundleLooseFiles(ctx, local, workspaceRoot, bundleDir, os.Stderr); err != nil {
+		fail(fmt.Errorf("local loose files: %w", err))
+	}
+
+	// Step 3 — ship the local bundle up to the pod via tar-over-Exec
+	// (Go-tar on the laptop, sh+tar on the pod, no temp file either side).
+	remoteParent := "/tmp/tmux-sync"
+	remoteBundleDir, err := capture.UploadBundle(ctx, podDriver, bundleDir, remoteParent, os.Stderr)
+	if err != nil {
+		fail(fmt.Errorf("upload: %w", err))
+	}
+	fmt.Fprintf(os.Stderr, "upload: bundle on pod at %s\n", remoteBundleDir)
+
+	// Step 4 — apply on the pod: per-repo stash + force-fetch sync-wip + check
+	// it out; loose files cp'd back; nvim sessions stashed for future wiring.
+	if err := capture.ApplyCheckin(ctx, podDriver, remoteBundleDir, "/workspace", os.Stderr); err != nil {
+		fail(fmt.Errorf("apply on pod: %w", err))
+	}
+
+	// Best-effort cleanup of the remote bundle now that we've applied it.
+	if rmErr := podDriver.Exec(ctx, []string{"rm", "-rf", remoteBundleDir}, nil, io.Discard, io.Discard); rmErr != nil {
+		fmt.Fprintf(os.Stderr, "checkin: warning: remote cleanup of %s failed: %v\n", remoteBundleDir, rmErr)
+	}
+
+	fmt.Fprintln(os.Stderr, "\ncheckin: ✓ done — your offline edits are on the pod as sync-wip.")
+	fmt.Fprintln(os.Stderr, "         the pod's prior state is in a git stash (recoverable via `git stash list`).")
+	os.Exit(0)
+}
+
+func cmdStatus(args []string) { notYet("status") }
+func cmdList(args []string)   { notYet("list") }
+
+// dockerOnPath reports whether `docker` is available on the local PATH.
+func dockerOnPath() bool {
+	_, err := exec.LookPath("docker")
+	return err == nil
+}
+
+// containerIsRunning reports whether a local container with the given name
+// is in the "running" state.
+func containerIsRunning(ctx context.Context, name string) bool {
+	cmd := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.State.Status}}", name)
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "running"
+}
