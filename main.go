@@ -317,8 +317,118 @@ func cmdCheckin(args []string) {
 	os.Exit(0)
 }
 
-func cmdStatus(args []string) { notYet("status") }
-func cmdList(args []string)   { notYet("list") }
+func cmdStatus(args []string) {
+	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	_ = fs.Parse(args)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fail(err)
+	}
+	workspacesDir := filepath.Join(home, ".tmux-sync", "workspaces")
+
+	entries, err := os.ReadDir(workspacesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("(no checkouts yet — run `tmux-sync checkout --from <endpoint>` first)")
+			return
+		}
+		fail(err)
+	}
+
+	hasAny := false
+	for _, ep := range entries {
+		if !ep.IsDir() {
+			continue
+		}
+		hasAny = true
+		endpoint := ep.Name()
+		epDir := filepath.Join(workspacesDir, endpoint)
+		fmt.Printf("endpoint %q  (%s)\n", endpoint, epDir)
+		repos, _ := os.ReadDir(epDir)
+		for _, r := range repos {
+			repoDir := filepath.Join(epDir, r.Name())
+			if _, err := os.Stat(filepath.Join(repoDir, ".git")); err == nil {
+				branch := gitBranch(repoDir)
+				dirty := ""
+				if gitDirty(repoDir) {
+					dirty = "  ⚠ uncommitted edits"
+				}
+				fmt.Printf("  %s  branch=%s%s\n", r.Name(), branch, dirty)
+			} else if r.IsDir() {
+				fmt.Printf("  %s  (loose)\n", r.Name())
+			}
+		}
+		// Container?
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if dockerOnPath() {
+			if state := containerStateOf(ctx, "tmux-sync-"+endpoint); state != "" {
+				fmt.Printf("  container tmux-sync-%s: %s\n", endpoint, state)
+			}
+		}
+		cancel()
+	}
+	if !hasAny {
+		fmt.Println("(no checkouts yet — run `tmux-sync checkout --from <endpoint>` first)")
+	}
+}
+
+func cmdList(args []string) {
+	fs := flag.NewFlagSet("list", flag.ExitOnError)
+	from := fs.String("from", "", "endpoint to list sessions from")
+	_ = fs.Parse(args)
+	if *from == "" {
+		fmt.Fprintln(os.Stderr, "list: --from <endpoint> required")
+		os.Exit(2)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		fail(err)
+	}
+	d, err := cfg.Resolve(*from)
+	if err != nil {
+		fail(err)
+	}
+	defer d.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = d.Exec(ctx, []string{"sh", "-c",
+		`tmux ls 2>/dev/null || echo "(no tmux server on remote yet)"`,
+	}, nil, os.Stdout, os.Stderr)
+	if err != nil {
+		fail(fmt.Errorf("list: %w", err))
+	}
+}
+
+// gitBranch returns the current branch of a git repo, or "?" on error.
+func gitBranch(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "branch", "--show-current").Output()
+	if err != nil {
+		return "?"
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// gitDirty reports whether the working tree has uncommitted changes.
+func gitDirty(dir string) bool {
+	out, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
+	if err != nil {
+		return false
+	}
+	return len(strings.TrimSpace(string(out))) > 0
+}
+
+// containerStateOf reports the state of a local docker container by name.
+// Empty string means it doesn't exist (or docker reported an error).
+func containerStateOf(ctx context.Context, name string) string {
+	cmd := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.State.Status}}", name)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
 
 // dockerOnPath reports whether `docker` is available on the local PATH.
 func dockerOnPath() bool {
