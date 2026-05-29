@@ -152,6 +152,12 @@ func cmdCheckout(args []string) {
 		fail(fmt.Errorf("git bundle: %w", err))
 	}
 
+	// Step 3.5 — any non-repo dirs under /workspace ride along as plain files
+	// in bundleDir/loose/. Cheap; serial-handoff means no merge is needed.
+	if err := capture.BundleLooseFiles(ctx, d, bundleDir, os.Stderr); err != nil {
+		fail(fmt.Errorf("loose files: %w", err))
+	}
+
 	// Step 4/N — package the remote bundle and stream it down to the laptop.
 	// `tar czf -` on the remote, piped through Exec, untar'd in-process here.
 	localBase, err := os.UserHomeDir()
@@ -178,6 +184,12 @@ func cmdCheckout(args []string) {
 	workspaceRoot := filepath.Join(localBase, ".tmux-sync", "workspaces", *from)
 	if err := reconstruct.RestoreRepos(ctx, landed, workspaceRoot, os.Stderr); err != nil {
 		fail(fmt.Errorf("restore repos: %w", err))
+	}
+
+	// Step 5.5 — mirror any loose (non-repo) files from the bundle into the
+	// workspace root alongside the restored clones.
+	if err := reconstruct.RestoreLooseFiles(ctx, landed, workspaceRoot, os.Stderr); err != nil {
+		fail(fmt.Errorf("restore loose files: %w", err))
 	}
 
 	// Step 6/N — launch the local container running the same image and
