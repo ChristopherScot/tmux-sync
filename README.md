@@ -5,12 +5,12 @@ open files & splits, the `claude` conversation, and the working files — to a
 container on your laptop, work **offline**, then check it back in and resume on
 the remote.
 
-> **Status: alpha — CLI is a skeleton.** See [`SPEC.md`](./SPEC.md) for the
-> design. The working bash prototype that informed it lives in
-> [`reference/tmux-sync.sh`](./reference/tmux-sync.sh) — sourceable directly if
-> you want a usable v0 while the Go binary lands. No tagged releases yet; once
-> tagged, binaries appear on the
-> [releases page](https://github.com/ChristopherScot/tmux-sync/releases).
+> **Status: alpha, *working*.** Full checkout + checkin round trip is wired
+> and verified end-to-end against a live `claude-pod` (both `k8s` and
+> `ssh-kubectl` transports). See [`SPEC.md`](./SPEC.md) for the design and
+> the per-feature [implementation status table](./SPEC.md#implementation-status).
+> The original bash prototype is preserved at
+> [`reference/tmux-sync.sh`](./reference/tmux-sync.sh) for context.
 
 ## Why
 
@@ -21,10 +21,18 @@ checkin` pushes it back and you resume on the remote.
 
 ## Install
 
-Pre-built binaries are published with each release for `darwin/{arm64,amd64}`
-and `linux/{amd64,arm64}`. Pick the tarball from the
-[releases page](https://github.com/ChristopherScot/tmux-sync/releases), extract,
-and drop `tmux-sync` somewhere on your `PATH`.
+Until a release post-`v0.0.1` is tagged, build from source on the branch with
+the working flow:
+
+```sh
+go install github.com/christopherscot/tmux-sync@feat/checkout-capture
+# make sure $(go env GOBIN || echo $(go env GOPATH)/bin) is on PATH
+tmux-sync version
+```
+
+After the next tag, pre-built binaries land on the
+[releases page](https://github.com/ChristopherScot/tmux-sync/releases) for
+`darwin/{arm64,amd64}` and `linux/{amd64,arm64}`.
 
 The same binary is installed into the `claude-pod` container image so the
 remote half is always the matching version.
@@ -38,14 +46,33 @@ intended.
 
 ## Usage
 
-```
-tmux-sync checkout --from homelab
-# ...work offline...
-tmux-sync checkin  --to   homelab
+```sh
+tmux-sync checkout --from homelab    # pod  → laptop, reconstruct + attach cmd
+# ...work offline (edits in ~/.tmux-sync/workspaces/<endpoint>/...)
+tmux-sync checkin  --to   homelab    # laptop → pod, restored on `sync-wip` ref
+tmux-sync status                     # which endpoints are checked out, what's dirty
+tmux-sync list     --from homelab    # remote `tmux ls` via the Driver
 ```
 
-Endpoints (k8s pod, GCP VM container, the laptop) live in
-`~/.config/tmux-sync/config.yaml`. See [`SPEC.md`](./SPEC.md#config).
+Endpoints live in `~/.config/tmux-sync/config.yaml`. Quick example with both
+direct-kubeconfig and SSH-hop transports:
+
+```yaml
+endpoints:
+  homelab:                # direct kubectl (your laptop has a working kubeconfig)
+    kind: k8s
+    context: homelab
+    namespace: claude-pods
+    pod: claude-session-0
+  homelab-ssh:            # SSH hop (kubectl runs on a cluster node)
+    kind: ssh-kubectl
+    host: homelab
+    namespace: claude-pods
+    pod: claude-session-0
+    ssh_args: ["-o", "ConnectTimeout=8"]
+```
+
+See [`SPEC.md#config`](./SPEC.md#config) for the full set of endpoint kinds.
 
 ## Design — short version
 

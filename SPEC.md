@@ -1,6 +1,9 @@
 # tmux-sync — design spec
 
-**Status:** design (alpha CLI is a stub).
+**Status:** alpha, **working**. Checkout + checkin round trip is implemented
+and verified end-to-end against a live `claude-pod` (k8s + ssh-kubectl
+transports). See [Implementation status](#implementation-status) below for
+the per-feature breakdown.
 **Goal:** Port a live remote `tmux` session — layout, scrollback, every running
 `nvim`'s open files & splits, the `claude` conversation, and the working files —
 to a container on your laptop, let you work **offline**, then check it back in
@@ -70,11 +73,13 @@ type Driver interface {
 
 Three implementations, each thin:
 
-| Backend | `Exec` is | Discovery |
-|---|---|---|
-| **k8s**     | `kubectl exec -n <ns> <pod> -i -- argv` (or client-go SPDY) | list pods by label |
-| **GCP VM**  | `ssh <host> docker exec -i <ctr> argv`, or a Docker SSH context (`docker --context <ctx> exec`) | `docker ps` over ssh |
-| **local**   | `docker exec -i <ctr> argv` | `docker ps` |
+| Backend | `Exec` is | Discovery | Status |
+|---|---|---|---|
+| **k8s**         | `kubectl exec -n <ns> <pod> -i -- argv`        | list pods by label   | ✅ implemented |
+| **ssh-kubectl** | `ssh <host> kubectl exec -i -n <ns> <pod> -- argv` (SSH-hop for laptops without direct kubeconfig) | as above on the remote | ✅ implemented |
+| **local**       | `docker exec -i <ctr> argv` (for local checkin nvim flush) | `docker ps`         | ✅ implemented |
+| **plain local** | run `argv[0]` on the laptop directly (for laptop-side git bundling on checkin) | n/a | ✅ implemented |
+| **ssh-docker**  | `ssh <host> docker exec -i <ctr> argv` (GCP VM)        | `docker ps` over ssh | ⏳ stub — errors with a clear message |
 
 Because file transfer is **tar streamed over `Exec`** (not `kubectl cp`), one
 code path moves files regardless of backend.
@@ -90,9 +95,22 @@ mechanism the v0 bash prototype used via `$TMUX_SYNC_EXEC`.)
 
 ```yaml
 endpoints:
-  homelab: { kind: k8s,        context: homelab, namespace: claude-pods, selector: app=claude-session }
-  gcp:     { kind: ssh-docker, host: claude-vm.tailnet.ts.net, container: claude-chris }
-  laptop:  { kind: local,      image: ghcr.io/christopherscot/claude-pod:latest }
+  # Direct kubectl context (your laptop must have a working kubeconfig).
+  homelab:
+    kind: k8s
+    context: homelab
+    namespace: claude-pods
+    pod: claude-session-0
+  # SSH-hop transport: kubectl runs on the SSH host, not on the laptop.
+  # Matches the bash prototype's default $TMUX_SYNC_EXEC.
+  homelab-via-ssh:
+    kind: ssh-kubectl
+    host: homelab                      # alias from ~/.ssh/config
+    namespace: claude-pods
+    pod: claude-session-0
+    ssh_args: ["-o", "ConnectTimeout=8"]
+  # GCP VM (planned).
+  gcp: { kind: ssh-docker, host: claude-vm.tailnet.ts.net, container: claude-chris }
 ```
 
 `tmux-sync checkout --from homelab` vs `--from gcp` is the only user-visible
@@ -245,12 +263,46 @@ GitHub API is hit at most once per TTL even if you fire commands in a loop.
 
 ---
 
+## Implementation status
+
+What's wired and proven against a live `claude-pod`:
+
+| Area | Status | Notes |
+|---|---|---|
+| `Driver` interface (the one primitive) | ✅ | `internal/driver/{driver,k8s,ssh_kubectl,docker,local}.go` |
+| Config + endpoint resolution | ✅ | `~/.config/tmux-sync/config.yaml`; k8s, ssh-kubectl, local, docker, ssh-docker(stub) |
+| Self-updater | ✅ | Throttled, writability-gated, stdlib only; no-op in the pod |
+| **Checkout — capture (pod-side)** | | |
+| · nvim flush + `:mksession` | ✅ | Mode-independent via `--remote-expr`; per-socket session files |
+| · tmux-resurrect save | ✅ | Layout + cwd + per-pane command + scrollback (`pane_contents.tar.gz`) |
+| · per-repo `git bundle` (shadow-commit) | ✅ | `GIT_INDEX_FILE` keeps user's real index untouched |
+| · loose files | ✅ | Non-repo `/workspace` entries `cp -a`'d into `bundle/loose/` |
+| **Checkout — transport** | ✅ | `tar czf -` over `Exec`, Go untar locally (no `tar` binary needed) |
+| **Checkout — local reconstruct** | | |
+| · restore repos → local clones | ✅ | Dirty-tree clobber guard; laptop-only branches survive |
+| · loose files | ✅ | |
+| · local container (`docker run`) | ✅ | Bind-mounts at the same absolute path; named home volume |
+| · tmux-resurrect restore | ✅ | Triggered inside the container after bundle copy-in |
+| · per-pane nvim `nvim -S` wiring | ⏳ | session files ship; sourcing per pane not yet wired into resurrect |
+| · claude `--resume` | ⏳ | transcript not yet captured/restored |
+| **Checkin (laptop → pod)** | | |
+| · nvim flush in local container | ✅ | Via `DockerExec` driver — same script as checkout |
+| · per-repo bundle locally | ✅ | Via `Local` driver — same `BundleRepos` script |
+| · loose files | ✅ | |
+| · upload + apply on pod | ✅ | `git stash push -u` saves pod's prior state (recoverable) |
+| **CLI** | | |
+| · `checkout` / `checkin` | ✅ | |
+| · `status` | ✅ | endpoints + per-repo branch + dirty markers + container state |
+| · `list --from <endpoint>` | ✅ | `tmux ls` on the remote via Driver |
+| · `version` / `help` | ✅ | |
+
 ## Phasing
 
-- **MVP** (one repo, one session, `--from homelab`):
-  Driver = k8s. Full session restore (resurrect + mksession + claude resume).
-  Local opener = same image via `docker run`.
-- **V2:** GCP-VM driver (`ssh-docker`), `status`/`list` commands, multi-arch
-  auto-build wiring, Homebrew tap, scratch-buffer capture.
+- **MVP** (largely complete): k8s + ssh-kubectl drivers, full session capture
+  on the pod side, transport, full local reconstruct (minus per-pane nvim
+  session sourcing and claude resume), full checkin round trip,
+  `status`/`list`/`version`.
+- **V1:** per-pane `nvim -S` on restore, claude `--resume`, GCP-VM
+  (`ssh-docker`) driver, multi-arch auto-build wiring, Homebrew tap.
 - **Maybe:** incremental re-sync (rsync/mutagen over `Exec`) if serial
-  snapshots feel heavy.
+  snapshots feel heavy; selector-based pod discovery for k8s endpoints.
