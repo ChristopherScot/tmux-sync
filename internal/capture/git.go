@@ -24,21 +24,30 @@ import (
 // ref (including sync-wip), so the laptop can `git clone <bundle>` and
 // immediately see the dirty state on the sync-wip branch.
 //
-// Non-repo entries under /workspace are counted but left for the loose-files
-// step (#4).
-func BundleRepos(ctx context.Context, d driver.Driver, outDir string, stderr io.Writer) error {
+// Non-repo entries under workspaceRoot are counted but left for the loose-
+// files step (BundleLooseFiles).
+//
+// workspaceRoot is whichever absolute path the workspace lives at *behind
+// the Driver*: "/workspace" for the K8s driver (pod) or DockerExec driver
+// (the bind mount inside the local container); the laptop's local workspaces
+// directory for the Local driver (checkin path).
+func BundleRepos(ctx context.Context, d driver.Driver, workspaceRoot, outDir string, stderr io.Writer) error {
+	if workspaceRoot == "" {
+		return fmt.Errorf("BundleRepos: workspaceRoot is required")
+	}
 	if outDir == "" {
 		return fmt.Errorf("BundleRepos: outDir is required")
 	}
-	script := bundleReposScript(outDir)
+	script := bundleReposScript(workspaceRoot, outDir)
 	return d.Exec(ctx, []string{"sh"}, strings.NewReader(script), io.Discard, stderr)
 }
 
-func bundleReposScript(outDir string) string {
+func bundleReposScript(workspaceRoot, outDir string) string {
+	wsq := strings.ReplaceAll(workspaceRoot, `'`, `'\''`)
 	q := strings.ReplaceAll(outDir, `'`, `'\''`)
 	return fmt.Sprintf(`set -u
 out='%s'
-workspace='/workspace'
+workspace='%s'
 mkdir -p "$out/repos"
 
 total=0
@@ -91,5 +100,5 @@ done
 
 printf 'git-bundle: %%d repos (%%d B), %%d loose, %%d errors, %%d total\n' \
     "$repos_done" "$repos_bytes" "$loose" "$errors" "$total" >&2
-`, q)
+`, q, wsq)
 }
