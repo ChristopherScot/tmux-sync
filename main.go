@@ -161,6 +161,12 @@ func cmdCheckout(args []string) {
 		fail(fmt.Errorf("loose files: %w", err))
 	}
 
+	// Step 3.75 — claude transcripts (`~/.claude/projects/`). Ships even when
+	// no claude pane is active so the laptop can `claude --resume` later.
+	if err := capture.CaptureClaudeTranscripts(ctx, d, bundleDir, os.Stderr); err != nil {
+		fail(fmt.Errorf("claude transcripts: %w", err))
+	}
+
 	// Step 4/N — package the remote bundle and stream it down to the laptop.
 	// `tar czf -` on the remote, piped through Exec, untar'd in-process here.
 	localBase, err := os.UserHomeDir()
