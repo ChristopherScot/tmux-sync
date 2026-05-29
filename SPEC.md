@@ -223,6 +223,26 @@ you, and is off the table (see decision 1).
   CLI tool (`ARG TMUX_SYNC_VERSION` + curl from the release).
 - The **laptop** installs via a curl one-liner or (later) a Homebrew tap.
 
+### Auto-update
+
+On the laptop, `tmux-sync` checks GitHub Releases at most once every 6h
+(cached via the mtime of `${XDG_CACHE_HOME:-~/.cache}/tmux-sync/last-update-check`)
+and, when a newer tag is published, atomically replaces its own binary on
+disk: `rename(2)` into place. The running process keeps the old inode; the
+new binary is used on the next invocation. Implementation lives in
+[`selfupdate.go`](./selfupdate.go) — pure stdlib, no third-party deps.
+
+Skipped silently when:
+- `$TMUX_SYNC_NO_UPDATE` is set,
+- this is a dev build (`version == "dev"`), or
+- the binary file isn't writable by the current user.
+
+The writability gate is what makes this safe inside the pod:
+`/usr/local/bin/tmux-sync` is root-owned, the pod runs as `node:1000`, so
+auto-update is a no-op — the pod stays version-pinned by the image while the
+laptop tracks `:latest`. Each run is throttled by an mtime cache so the
+GitHub API is hit at most once per TTL even if you fire commands in a loop.
+
 ---
 
 ## Phasing

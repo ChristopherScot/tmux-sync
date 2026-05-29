@@ -29,6 +29,13 @@ and drop `tmux-sync` somewhere on your `PATH`.
 The same binary is installed into the `claude-pod` container image so the
 remote half is always the matching version.
 
+**Auto-update.** Once installed, `tmux-sync` checks GitHub Releases at most
+once every 6 hours and atomically replaces itself in place when a newer tag
+is published; the new version takes effect on the next invocation. Opt out
+with `TMUX_SYNC_NO_UPDATE=1`. Inside the pod the binary is root-owned, so
+auto-update is naturally a no-op there — version-pinned by the image as
+intended.
+
 ## Usage
 
 ```

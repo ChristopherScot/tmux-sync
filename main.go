@@ -29,6 +29,12 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+	// Best-effort auto-update before running a real command.
+	// Skipped for diagnostic commands (you should be able to print --version
+	// reliably without surprise network traffic or a binary swap).
+	if !isDiagnostic(args[0]) {
+		maybeSelfUpdate()
+	}
 	switch args[0] {
 	case "checkout":
 		cmdCheckout(args[1:])
@@ -64,6 +70,17 @@ Commands:
 
 See SPEC.md for the design.
 `)
+}
+
+// isDiagnostic reports whether a command should run without triggering the
+// background auto-update (we don't want `tmux-sync --version` to ever swap the
+// binary mid-diagnosis, or `--help` to make a network request).
+func isDiagnostic(cmd string) bool {
+	switch cmd {
+	case "version", "--version", "-v", "help", "--help", "-h":
+		return true
+	}
+	return false
 }
 
 func notYet(cmd string) {
