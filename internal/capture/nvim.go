@@ -52,20 +52,37 @@ func nvimFlushScript(outDir string) string {
 	return fmt.Sprintf(`set -u
 out='%s'
 mkdir -p "$out"
+map="$out/pane-map.txt"
+: > "$map"
 count=0
 flushed=0
 skipped=0
+mapped=0
 for s in $(find /tmp/nvim* /run/user/*/nvim.* -type s -name 'nvim.*' 2>/dev/null); do
     count=$((count + 1))
     sname=$(basename "$s")
+    # Where in tmux is this nvim running? $TMUX_PANE is inherited from the
+    # spawning pane. We use the session:window.pane *index* string (e.g.
+    # "work-homelab:1.1") because the pane *id* (%5) is server-generated and
+    # doesn't survive a server restart; the indexed location does (tmux-
+    # resurrect rebuilds the same windows/panes in the same positions).
+    pane_id=$(nvim --server "$s" --remote-expr "expand('\$TMUX_PANE')" 2>/dev/null)
+    pane_loc=""
+    if [ -n "$pane_id" ]; then
+        pane_loc=$(tmux display-message -t "$pane_id" -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)
+    fi
     expr="execute('silent! wall | mksession! ${out}/${sname}.vim')"
     if nvim --server "$s" --remote-expr "$expr" >/dev/null 2>&1; then
         flushed=$((flushed + 1))
+        if [ -n "$pane_loc" ]; then
+            printf '%%s %%s\n' "$pane_loc" "$sname.vim" >> "$map"
+            mapped=$((mapped + 1))
+        fi
     else
         skipped=$((skipped + 1))
     fi
 done
-printf 'nvim-flush: %%d flushed, %%d skipped (dead socket / no nvim), %%d total\n' \
-    "$flushed" "$skipped" "$count" >&2
+printf 'nvim-flush: %%d flushed (%%d mapped to panes), %%d skipped (dead socket / no nvim), %%d total\n' \
+    "$flushed" "$mapped" "$skipped" "$count" >&2
 `, q)
 }
