@@ -18,6 +18,7 @@ import (
 
 	"github.com/christopherscot/tmux-sync/internal/capture"
 	"github.com/christopherscot/tmux-sync/internal/config"
+	"github.com/christopherscot/tmux-sync/internal/reconstruct"
 )
 
 // Set at build time by GoReleaser.
@@ -169,7 +170,16 @@ func cmdCheckout(args []string) {
 		fmt.Fprintf(os.Stderr, "transfer: warning: remote cleanup of %s failed: %v\n", bundleDir, rmErr)
 	}
 
-	fmt.Fprintln(os.Stderr, "checkout: ✓ remote captured + transferred. Local reconstruct (docker run + restore) not yet implemented — see SPEC.md")
+	// Step 5/N — restore the repo bundles into persistent local clones.
+	// Each repo lands on the captured `sync-wip` ref (the shadow commit), so
+	// the working tree reflects the exact mid-edit state from the pod.
+	// Existing clones with un-checked-in edits are refused (no clobber).
+	workspaceRoot := filepath.Join(localBase, ".tmux-sync", "workspaces", *from)
+	if err := reconstruct.RestoreRepos(ctx, landed, workspaceRoot, os.Stderr); err != nil {
+		fail(fmt.Errorf("restore repos: %w", err))
+	}
+
+	fmt.Fprintln(os.Stderr, "checkout: ✓ remote captured + transferred + repos restored locally. Container provision + tmux restore not yet implemented — see SPEC.md")
 	os.Exit(0)
 }
 
