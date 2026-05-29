@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/christopherscot/tmux-sync/internal/capture"
@@ -179,7 +180,26 @@ func cmdCheckout(args []string) {
 		fail(fmt.Errorf("restore repos: %w", err))
 	}
 
-	fmt.Fprintln(os.Stderr, "checkout: ✓ remote captured + transferred + repos restored locally. Container provision + tmux restore not yet implemented — see SPEC.md")
+	// Step 6/N — launch the local container running the same image and
+	// restore the tmux frame inside it. Silently skipped if `docker` isn't
+	// on PATH (the bundle + repo clones are already useful without it).
+	attach, err := reconstruct.LaunchAndRestore(ctx, reconstruct.ContainerOptions{
+		Image:          "ghcr.io/christopherscot/claude-pod:latest",
+		Name:           "tmux-sync-" + *from,
+		WorkspaceMount: workspaceRoot,
+		HomeVolume:     "tmux-sync-home-" + *from,
+		BundleDir:      landed,
+	}, os.Stderr)
+	if err != nil {
+		fail(fmt.Errorf("launch and restore: %w", err))
+	}
+
+	fmt.Fprintln(os.Stderr, "checkout: ✓ remote captured + transferred + repos restored locally + container restore triggered.")
+	if attach != nil {
+		fmt.Fprintf(os.Stderr, "\nAttach to your session with:\n  %s\n", strings.Join(attach, " "))
+	} else {
+		fmt.Fprintf(os.Stderr, "\nYour synced files are at: %s\n", workspaceRoot)
+	}
 	os.Exit(0)
 }
 
