@@ -135,7 +135,14 @@ func cmdCheckout(args []string) {
 		fail(fmt.Errorf("nvim flush: %w", err))
 	}
 
-	fmt.Fprintln(os.Stderr, "checkout: remaining steps (resurrect save, git bundle, transfer) not yet implemented — see SPEC.md")
+	// Step 2/N — tmux-resurrect save: layout / cwd / per-pane running command
+	// / scrollback. The image enables @resurrect-capture-pane-contents on.
+	tmuxDir := bundleDir + "/tmux"
+	if err := capture.SaveTmuxResurrect(ctx, d, tmuxDir, os.Stderr); err != nil {
+		fail(fmt.Errorf("tmux-resurrect save: %w", err))
+	}
+
+	fmt.Fprintln(os.Stderr, "checkout: remaining steps (git bundle, transfer) not yet implemented — see SPEC.md")
 	os.Exit(1)
 }
 
