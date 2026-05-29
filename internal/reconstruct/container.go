@@ -59,6 +59,13 @@ func LaunchAndRestore(ctx context.Context, opts ContainerOptions, stderr io.Writ
 	if err := triggerResurrectRestore(ctx, opts, stderr); err != nil {
 		return nil, fmt.Errorf("triggerResurrectRestore: %w", err)
 	}
+	// Per-pane nvim mksession: resurrect relaunches `nvim` in each pane that
+	// had one; this step then sources our captured mksession into each so the
+	// pane comes back with the right buffer list / window splits / jumplist.
+	// Best-effort — failure here doesn't break the rest of restore.
+	if err := sourceNvimSessions(ctx, opts, stderr); err != nil {
+		fmt.Fprintf(stderr, "container: warning: nvim session sourcing failed: %v\n", err)
+	}
 	return []string{"docker", "exec", "-it", opts.Name, "tmux", "attach"}, nil
 }
 
@@ -173,6 +180,51 @@ if [ "$(tmux list-sessions -F '#S' | wc -l)" -gt 1 ]; then
     tmux kill-session -t _bootstrap 2>/dev/null || true
 fi
 echo "container: tmux-resurrect restore triggered" >&2
+`
+	return dockerExecScript(ctx, opts.Name, stderr, script)
+}
+
+// sourceNvimSessions reads the pane-map.txt captured at flush time and, for
+// each (pane-location → mksession file) entry, finds the current pane at that
+// location and `:source`s the session file into the nvim that tmux-resurrect
+// just relaunched there.
+//
+// Mechanism: tmux send-keys (with an Esc preamble to ensure normal mode) into
+// the resolved pane id. Yes, send-keys is mode-fragile — but immediately after
+// resurrect's restart the pane is the freshly-spawned `nvim`, which IS in
+// normal mode with an empty buffer, so the Esc+`:source X<CR>` sequence lands
+// reliably. A small sleep upfront lets nvim finish coming up.
+//
+// No-op (and no error) when the bundle had no per-pane mapping (e.g. resurrect
+// captured panes but the capture happened before this commit, or there were
+// no live nvims).
+func sourceNvimSessions(ctx context.Context, opts ContainerOptions, stderr io.Writer) error {
+	script := `set -u
+map="$HOME/.tmux-sync/nvim-sessions/pane-map.txt"
+[ -f "$map" ] || { echo "nvim-sessions: no pane-map.txt (nothing to source)" >&2; exit 0; }
+
+# Give the panes resurrect just respawned a moment to land in nvim.
+sleep 0.6
+
+sourced=0
+missing=0
+while IFS=' ' read -r loc sess; do
+    [ -n "$loc" ] && [ -n "$sess" ] || continue
+    pane=$(tmux list-panes -a -F '#{pane_id} #{session_name}:#{window_index}.#{pane_index}' 2>/dev/null \
+        | awk -v L="$loc" '$2==L{print $1; exit}')
+    if [ -z "$pane" ]; then
+        missing=$((missing + 1))
+        continue
+    fi
+    sess_path="$HOME/.tmux-sync/nvim-sessions/$sess"
+    [ -f "$sess_path" ] || { missing=$((missing + 1)); continue; }
+    # Esc → leave any pending keymap; :source <path> → load the mksession; <CR>.
+    tmux send-keys -t "$pane" Escape
+    tmux send-keys -t "$pane" ":source $sess_path" Enter
+    sourced=$((sourced + 1))
+done < "$map"
+printf 'nvim-sessions: %d sourced, %d unmatched (pane gone / file missing)\n' \
+    "$sourced" "$missing" >&2
 `
 	return dockerExecScript(ctx, opts.Name, stderr, script)
 }
