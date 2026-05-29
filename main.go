@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/christopherscot/tmux-sync/internal/capture"
@@ -149,8 +150,27 @@ func cmdCheckout(args []string) {
 		fail(fmt.Errorf("git bundle: %w", err))
 	}
 
-	fmt.Fprintln(os.Stderr, "checkout: remaining steps (loose files + transfer) not yet implemented — see SPEC.md")
-	os.Exit(1)
+	// Step 4/N — package the remote bundle and stream it down to the laptop.
+	// `tar czf -` on the remote, piped through Exec, untar'd in-process here.
+	localBase, err := os.UserHomeDir()
+	if err != nil {
+		fail(fmt.Errorf("locate home dir: %w", err))
+	}
+	localCheckoutDir := filepath.Join(localBase, ".tmux-sync", "checkouts")
+	landed, err := capture.Transfer(ctx, d, bundleDir, localCheckoutDir, os.Stderr)
+	if err != nil {
+		fail(fmt.Errorf("transfer: %w", err))
+	}
+	fmt.Fprintf(os.Stderr, "transfer: bundle landed at %s\n", landed)
+
+	// Best-effort: clean up the remote bundle dir now that we have it locally.
+	// Failure here is non-fatal — the user already has the bundle.
+	if rmErr := d.Exec(ctx, []string{"rm", "-rf", bundleDir}, nil, os.Stderr, os.Stderr); rmErr != nil {
+		fmt.Fprintf(os.Stderr, "transfer: warning: remote cleanup of %s failed: %v\n", bundleDir, rmErr)
+	}
+
+	fmt.Fprintln(os.Stderr, "checkout: ✓ remote captured + transferred. Local reconstruct (docker run + restore) not yet implemented — see SPEC.md")
+	os.Exit(0)
 }
 
 func cmdCheckin(args []string) { notYet("checkin") }
