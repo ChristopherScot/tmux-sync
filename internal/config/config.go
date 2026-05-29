@@ -28,8 +28,11 @@ type Endpoint struct {
 	Selector  string `yaml:"selector,omitempty"`  // OR a label selector (e.g., app=claude-session)
 	Container string `yaml:"container,omitempty"` // optional, when the pod has >1 container
 
+	// ssh-kubectl / ssh-docker ------------------------------------------
+	Host    string   `yaml:"host,omitempty"`     // ssh host (alias or user@host)
+	SSHArgs []string `yaml:"ssh_args,omitempty"` // extra ssh args, e.g. ["-o","ConnectTimeout=8"]
+
 	// ssh-docker ---------------------------------------------------------
-	Host      string `yaml:"host,omitempty"`      // ssh host (alias or user@host)
 	ContainerName string `yaml:"container_name,omitempty"` // remote docker container name
 
 	// local --------------------------------------------------------------
@@ -84,6 +87,14 @@ func (c *Config) Resolve(name string) (driver.Driver, error) {
 			return nil, fmt.Errorf("endpoint %q: selector-based pod discovery is planned but not yet implemented; set `pod:` explicitly", name)
 		}
 		return driver.NewK8s(ep.Context, ep.Namespace, ep.Pod, ep.Container)
+	case "ssh-kubectl":
+		// Like k8s, but runs kubectl on a remote SSH host. For laptops that
+		// can ssh to a cluster node but don't have a direct kubeconfig to
+		// the cluster API.
+		if ep.Pod == "" && ep.Selector != "" {
+			return nil, fmt.Errorf("endpoint %q: selector-based pod discovery is planned but not yet implemented; set `pod:` explicitly", name)
+		}
+		return driver.NewSSHKubectl(ep.Host, ep.Context, ep.Namespace, ep.Pod, ep.Container, ep.SSHArgs)
 	case "ssh-docker", "local":
 		return nil, fmt.Errorf("endpoint %q: kind %q is planned but not yet implemented (see SPEC.md)", name, ep.Kind)
 	case "":
