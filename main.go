@@ -148,13 +148,13 @@ func cmdCheckout(args []string) {
 	// Step 3/N — per-repo git bundle of the dirty working tree (tracked +
 	// untracked + uncommitted), captured onto a sync-wip ref via the
 	// shadow-commit trick without disturbing the user's index/HEAD/branches.
-	if err := capture.BundleRepos(ctx, d, bundleDir, os.Stderr); err != nil {
+	if err := capture.BundleRepos(ctx, d, "/workspace", bundleDir, os.Stderr); err != nil {
 		fail(fmt.Errorf("git bundle: %w", err))
 	}
 
 	// Step 3.5 — any non-repo dirs under /workspace ride along as plain files
 	// in bundleDir/loose/. Cheap; serial-handoff means no merge is needed.
-	if err := capture.BundleLooseFiles(ctx, d, bundleDir, os.Stderr); err != nil {
+	if err := capture.BundleLooseFiles(ctx, d, "/workspace", bundleDir, os.Stderr); err != nil {
 		fail(fmt.Errorf("loose files: %w", err))
 	}
 

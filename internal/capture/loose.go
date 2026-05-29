@@ -20,19 +20,23 @@ import (
 //
 // At restore time, the laptop side mirrors the loose tree back into
 // workspaceRoot via reconstruct.RestoreLooseFiles.
-func BundleLooseFiles(ctx context.Context, d driver.Driver, outDir string, stderr io.Writer) error {
+func BundleLooseFiles(ctx context.Context, d driver.Driver, workspaceRoot, outDir string, stderr io.Writer) error {
+	if workspaceRoot == "" {
+		return fmt.Errorf("BundleLooseFiles: workspaceRoot is required")
+	}
 	if outDir == "" {
 		return fmt.Errorf("BundleLooseFiles: outDir is required")
 	}
-	script := bundleLooseFilesScript(outDir)
+	script := bundleLooseFilesScript(workspaceRoot, outDir)
 	return d.Exec(ctx, []string{"sh"}, strings.NewReader(script), io.Discard, stderr)
 }
 
-func bundleLooseFilesScript(outDir string) string {
+func bundleLooseFilesScript(workspaceRoot, outDir string) string {
+	wsq := strings.ReplaceAll(workspaceRoot, `'`, `'\''`)
 	q := strings.ReplaceAll(outDir, `'`, `'\''`)
 	return fmt.Sprintf(`set -u
 out='%s'
-workspace='/workspace'
+workspace='%s'
 mkdir -p "$out/loose"
 
 count=0
@@ -55,5 +59,5 @@ if [ "$count" -gt 0 ]; then
     [ -n "$bytes" ] || bytes='?'
 fi
 printf 'loose-files: %%s entries, %%s bytes copied\n' "$count" "$bytes" >&2
-`, q)
+`, q, wsq)
 }
