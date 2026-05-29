@@ -123,7 +123,7 @@ func copyBundleIn(ctx context.Context, opts ContainerOptions, stderr io.Writer) 
 	if err := dockerExec(ctx, opts.Name, stderr, "mkdir", "-p",
 		"/home/node/.local/share/tmux/resurrect",
 		"/home/node/.tmux-sync/nvim-sessions",
-		"/home/node/.tmux-sync/claude"); err != nil {
+		"/home/node/.claude/projects"); err != nil {
 		return err
 	}
 
@@ -146,10 +146,11 @@ func copyBundleIn(ctx context.Context, opts ContainerOptions, stderr io.Writer) 
 			return fmt.Errorf("copy nvim sessions: %w", err)
 		}
 	}
-	// claude transcripts (per-project dirs)
-	if claudeDir := filepath.Join(opts.BundleDir, "claude"); dirExists(claudeDir) {
-		if err := dockerCp(ctx, stderr, claudeDir+"/.", opts.Name+":/home/node/.tmux-sync/claude/"); err != nil {
-			return fmt.Errorf("copy claude: %w", err)
+	// claude transcripts — bundle/claude/projects/ → /home/node/.claude/projects/
+	// so `claude --resume <session-id>` can find them.
+	if claudeProjects := filepath.Join(opts.BundleDir, "claude", "projects"); dirExists(claudeProjects) {
+		if err := dockerCp(ctx, stderr, claudeProjects+"/.", opts.Name+":/home/node/.claude/projects/"); err != nil {
+			return fmt.Errorf("copy claude projects: %w", err)
 		}
 	}
 
@@ -157,7 +158,8 @@ func copyBundleIn(ctx context.Context, opts ContainerOptions, stderr io.Writer) 
 	// `docker cp` lands files as root inside the container by default.
 	if err := dockerExec(ctx, opts.Name, stderr, "chown", "-R", "1000:1000",
 		"/home/node/.local/share/tmux/resurrect",
-		"/home/node/.tmux-sync"); err != nil {
+		"/home/node/.tmux-sync",
+		"/home/node/.claude/projects"); err != nil {
 		return fmt.Errorf("chown bundle in container: %w", err)
 	}
 	return nil
