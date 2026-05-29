@@ -142,7 +142,14 @@ func cmdCheckout(args []string) {
 		fail(fmt.Errorf("tmux-resurrect save: %w", err))
 	}
 
-	fmt.Fprintln(os.Stderr, "checkout: remaining steps (git bundle, transfer) not yet implemented — see SPEC.md")
+	// Step 3/N — per-repo git bundle of the dirty working tree (tracked +
+	// untracked + uncommitted), captured onto a sync-wip ref via the
+	// shadow-commit trick without disturbing the user's index/HEAD/branches.
+	if err := capture.BundleRepos(ctx, d, bundleDir, os.Stderr); err != nil {
+		fail(fmt.Errorf("git bundle: %w", err))
+	}
+
+	fmt.Fprintln(os.Stderr, "checkout: remaining steps (loose files + transfer) not yet implemented — see SPEC.md")
 	os.Exit(1)
 }
 
