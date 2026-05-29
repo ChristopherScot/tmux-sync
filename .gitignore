@@ -1,0 +1,12 @@
+# build outputs
+/tmux-sync
+/dist/
+
+# go
+*.test
+*.out
+vendor/
+
+# editors / OS
+.DS_Store
+*.swp
